@@ -1,5 +1,5 @@
 # MC-QueryServer
-A project to handle minecraft query request
+A light weight query server for custom minecraft servers 
 
 # USAGE
 
