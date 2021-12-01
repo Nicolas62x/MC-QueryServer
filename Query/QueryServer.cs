@@ -2,8 +2,12 @@
 using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
-QueryServer query = new QueryServer(()=> new QueryServer.BasicServerInfo { MOTD = "A Query Server !", GameType = "Testing", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" });
+QueryServer query = new QueryServer(
+    () => new QueryServer.BasicServerInfo { MOTD = "A Query Server !", GameType = "Testing", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" },
+    () => new QueryServer.FullServerInfo { MOTD = "A Query Server !", GameType = "Testing", GameID = "MINECRAFT", Plugins = "", Players = new string[] { "Nicolas61x", "dadodasyra", "Zelytra" }, Version = "1.18.0", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" }
+    );
 
 query.StartListening(19132);
 
@@ -26,7 +30,8 @@ class QueryServer
 {
     //consts
     const int MaxSocketRetry = 10;
-    const ushort Magic = 0xFEFD;    
+    static readonly byte[] Padding1 = new byte[] { 0x73, 0x70, 0x6c, 0x69, 0x74, 0x6e, 0x75, 0x6d, 0x00, 0x80, 0x00 };
+    static readonly byte[] Padding2 = new byte[] { 0x01, 0x70, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x5f, 0x00, 0x00 };
 
     static ArrayPool<byte> Bytes = ArrayPool<byte>.Shared;
     
@@ -67,9 +72,28 @@ class QueryServer
     BasicInfoCB GetBasic;
     public delegate BasicServerInfo BasicInfoCB();
 
-    public QueryServer(BasicInfoCB BasicCallBack)
+    public struct FullServerInfo
+    {
+        public string MOTD;
+        public string GameType;
+        public string GameID;
+        public string Version;
+        public string Plugins;
+        public string MapName;
+        public string NumPlayers;
+        public string MaxPlayers;
+        public ushort HostPort;
+        public string HostIp;
+        public string[] Players;
+    }
+
+    FullInfoCB GetInfo;
+    public delegate FullServerInfo FullInfoCB();
+
+    public QueryServer(BasicInfoCB BasicCallBack, FullInfoCB FullCallBack)
     {
         GetBasic = BasicCallBack;
+        GetInfo = FullCallBack;
     }
 
     /// <summary>
@@ -163,14 +187,7 @@ class QueryServer
                     response.Add(9);
                     response.AddRange(BitConverter.GetBytes(session));
 
-                    ReadOnlySpan<char> tok = token.ToString().AsSpan();
-
-                    for (int i = 0; i < tok.Length; i++)
-                    {
-                        response.Add((byte)tok[i]);
-                    }
-
-                    response.Add(0);
+                    AddString(response, token.ToString());
 
                     Send(new SendPacket { data = response.ToArray(), ep = address });
                 }
@@ -183,15 +200,70 @@ class QueryServer
                 {
                     if (!CheckToken(buffer, ref ptr, address))
                         return;
+
+                    List<byte> response = new List<byte>();
+
+                    response.Add(0);
+                    response.AddRange(BitConverter.GetBytes(session));
+
+                    BasicServerInfo info = GetBasic();
+
+                    AddString(response, info.MOTD);
+                    AddString(response, info.GameType);
+                    AddString(response, info.MapName);
+                    AddString(response, info.NumPlayers);
+                    AddString(response, info.MaxPlayers);
+                    response.AddRange(BitConverter.GetBytes(info.HostPort));
+                    AddString(response, info.HostIp);
+
+                    Send(new SendPacket { data = response.ToArray(), ep = address });
                 }
                 else if (len == 15)
                 {
                     if (!CheckToken(buffer, ref ptr, address))
                         return;
+
+                    List<byte> response = new List<byte>();
+
+                    response.Add(0);
+                    response.AddRange(BitConverter.GetBytes(session));
+
+                    response.AddRange(Padding1);
+
+                    FullServerInfo info = GetInfo();
+                    
+                    AddString(response, info.MOTD);
+                    AddString(response, info.GameType);
+                    AddString(response, info.GameID);
+                    AddString(response, info.Version);
+                    AddString(response, info.Plugins);
+                    AddString(response, info.MapName);
+                    AddString(response, info.NumPlayers);
+                    AddString(response, info.MaxPlayers);
+                    response.AddRange(BitConverter.GetBytes(info.HostPort));
+                    AddString(response, info.HostIp);
+
+                    response.AddRange(Padding2);
+
+                    if (info.Players is not null)
+                        for (int i = 0; i < info.Players.Length; i++)
+                        {
+                            AddString(response, info.Players[i]);
+                        }
+                    response.Add(0);
+
+                    Send(new SendPacket { data = response.ToArray(), ep = address });
                 }
 
                 break;
         }
+    }
+
+    void AddString(in List<byte> buffer, string s)
+    {
+        if (s is not null)
+            buffer.AddRange(Encoding.UTF8.GetBytes(s));
+        buffer.Add(0);
     }
 
     bool CheckToken(byte[] buffer, ref int ptr, EndPoint address)
