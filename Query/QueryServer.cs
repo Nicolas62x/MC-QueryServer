@@ -3,7 +3,7 @@ using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 
-QueryServer query = new QueryServer(()=>);
+QueryServer query = new QueryServer(()=> new QueryServer.BasicServerInfo { MOTD = "A Query Server !", GameType = "Testing", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" });
 
 query.StartListening(19132);
 
