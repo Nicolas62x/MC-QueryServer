@@ -4,33 +4,27 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
+
 QueryServer query = new QueryServer(
+    //theses anonimous function can be any function with a prototype of BaseServerInfo function() and BaseServerInfo FullServerInfo()
     () => new QueryServer.BasicServerInfo { MOTD = "A Query Server !", GameType = "Testing", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" },
-    () => new QueryServer.FullServerInfo { MOTD = "A Query Server !", GameType = "Testing", GameID = "MINECRAFT", Plugins = "", Players = new string[] { "Nicolas61x", "dadodasyra", "Zelytra" }, Version = "1.18.0", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" }
+    () => new QueryServer.FullServerInfo { MOTD = "A Query Server !", GameType = "Testing", GameID = "MINECRAFT", Plugins = "", Players = new string[] { "Nicolas61x", "dadodasyra", "Zelytra" }, Version = "1.18.0", MapName = "None", NumPlayers = "42", MaxPlayers = "69", HostPort = 19132, HostIp = "127.0.0.1" },
+    19132
     );
 
-query.StartListening(19132);
-
-Socket s = new Socket(SocketType.Dgram, ProtocolType.Udp);
-
-s.Bind(new IPEndPoint(IPAddress.IPv6Any, 0));
-
-s.SendTo(new byte[] { 0xFE, 0xFD, 0x9, 0x42, 0x73, 0x24, 0x69 }, new IPEndPoint(IPAddress.IPv6Loopback, 19132));
-Thread.Sleep(200);
-s.SendTo(new byte[] { 0xFE, 0xFD, 0x0, 0x42, 0x73, 0x24, 0x69 , 0, 0, 0, 0}, new IPEndPoint(IPAddress.IPv6Loopback, 19132));
-
-while (true)
-Thread.Sleep(5000);
+//run the query server for 60s
+Thread.Sleep(60000);
 
 query.StopListening();
 
 /// <summary>
-/// Class used to listen for minecraft querys and respond
+/// Class used to listen for minecraft querys and respond with data provided by callbacks
 /// </summary>
 class QueryServer
 {
     //consts
     const int MaxSocketRetry = 10;
+    const int CacheDuration = 5;//update cache every 5s if necessary
     static readonly byte[] Padding1 = new byte[] { 0x73, 0x70, 0x6c, 0x69, 0x74, 0x6e, 0x75, 0x6d, 0x00, 0x80, 0x00 };
     static readonly byte[] Padding2 = new byte[] { 0x01, 0x70, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x5f, 0x00, 0x00 };
 
@@ -72,7 +66,6 @@ class QueryServer
 
     BasicInfoCB GetBasic;
     public delegate BasicServerInfo BasicInfoCB();
-
     public struct FullServerInfo
     {
         public string MOTD;
@@ -91,10 +84,26 @@ class QueryServer
     FullInfoCB GetInfo;
     public delegate FullServerInfo FullInfoCB();
 
+    //cache
+    BasicServerInfo BasicCache;
+    DateTime BasicCacheTimeOut = DateTime.MinValue;
+    object BasicCacheLock = new object();
+
+    FullServerInfo FullCache;
+    DateTime FullCacheTimeOut = DateTime.MinValue;    
+    object FullCacheLock = new object();
+
     public QueryServer(BasicInfoCB BasicCallBack, FullInfoCB FullCallBack)
     {
         GetBasic = BasicCallBack;
         GetInfo = FullCallBack;
+    }
+
+    public QueryServer(BasicInfoCB BasicCallBack, FullInfoCB FullCallBack, ushort port)
+    {
+        GetBasic = BasicCallBack;
+        GetInfo = FullCallBack;
+        StartListening(port);
     }
 
     /// <summary>
@@ -114,6 +123,7 @@ class QueryServer
             s.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
 
             Listen();
+            Sending = false;
         }        
     }
 
@@ -209,7 +219,15 @@ class QueryServer
                     response.Add(0);
                     response.AddRange(BitConverter.GetBytes(session));
 
-                    BasicServerInfo info = GetBasic();
+                    if (BasicCacheTimeOut < DateTime.Now)
+                        lock (BasicCacheLock)
+                            if (BasicCacheTimeOut < DateTime.Now)//double check to prevent lock when not necessary and prevent multiple threads to update the value
+                            {
+                                BasicCache = GetBasic();
+                                BasicCacheTimeOut = DateTime.Now.AddSeconds(CacheDuration);
+                            }
+
+                    BasicServerInfo info = BasicCache;
 
                     AddString(response, info.MOTD);
                     AddString(response, info.GameType);
@@ -235,19 +253,37 @@ class QueryServer
 
                     response.AddRange(Padding1);
 
-                    FullServerInfo info = GetInfo();
-                    
-                    AddString(response, info.MOTD);
-                    AddString(response, info.GameType);
-                    AddString(response, info.GameID);
-                    AddString(response, info.Version);
-                    AddString(response, info.Plugins);
-                    AddString(response, info.MapName);
-                    AddString(response, info.NumPlayers);
-                    AddString(response, info.MaxPlayers);
-                    response.AddRange(BitConverter.GetBytes(info.HostPort));
-                    AddString(response, info.HostIp);
+                    if (FullCacheTimeOut < DateTime.Now)
+                        lock (FullCacheLock)
+                            if (FullCacheTimeOut < DateTime.Now)//double check to prevent lock when not necessary and prevent multiple threads to update the value
+                            {
+                                FullCache = GetInfo();
+                                FullCacheTimeOut = DateTime.Now.AddSeconds(CacheDuration);
+                            }
 
+                    FullServerInfo info = FullCache;
+
+                    AddString(response, "hostname");
+                    AddString(response, info.MOTD);
+                    AddString(response, "gametype");
+                    AddString(response, info.GameType);
+                    AddString(response, "game_id");
+                    AddString(response, info.GameID);
+                    AddString(response, "version");
+                    AddString(response, info.Version);
+                    AddString(response, "plugins");
+                    AddString(response, info.Plugins);
+                    AddString(response, "map");
+                    AddString(response, info.MapName);
+                    AddString(response, "numplayers");
+                    AddString(response, info.NumPlayers);
+                    AddString(response, "maxplayers");
+                    AddString(response, info.MaxPlayers);
+                    AddString(response, "hostport");
+                    AddString(response, info.HostPort.ToString());
+                    AddString(response, "hostip");    
+                    AddString(response, info.HostIp);
+                    response.Add(0);
                     response.AddRange(Padding2);
 
                     if (info.Players is not null)
@@ -302,8 +338,8 @@ class QueryServer
 
                 try
                 {
-                    s.BeginSendTo(packet.data, 0, packet.data.Length, SocketFlags.None, packet.ep, OnSend, this);
                     Sending = true;
+                    s.BeginSendTo(packet.data, 0, packet.data.Length, SocketFlags.None, packet.ep, OnSend, this);                    
                 }
                 catch (Exception)
                 {
