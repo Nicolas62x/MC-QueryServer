@@ -182,6 +182,8 @@ class QueryServer
                         TokenExpiration.Enqueue(token, DateTime.Now.AddSeconds(30));
                     }
 
+                    Console.WriteLine($"Generated token {token} for {address}");
+
                     List<byte> response = new List<byte>();
                     
                     response.Add(9);
@@ -215,6 +217,8 @@ class QueryServer
                     AddString(response, info.MaxPlayers);
                     response.AddRange(BitConverter.GetBytes(info.HostPort));
                     AddString(response, info.HostIp);
+
+                    Console.WriteLine($"Sending basic stats to {address}");
 
                     Send(new SendPacket { data = response.ToArray(), ep = address });
                 }
@@ -251,6 +255,8 @@ class QueryServer
                             AddString(response, info.Players[i]);
                         }
                     response.Add(0);
+
+                    Console.WriteLine($"Sending full stats to {address}");
 
                     Send(new SendPacket { data = response.ToArray(), ep = address });
                 }
