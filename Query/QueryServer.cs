@@ -19,6 +19,7 @@ s.SendTo(new byte[] { 0xFE, 0xFD, 0x9, 0x42, 0x73, 0x24, 0x69 }, new IPEndPoint(
 Thread.Sleep(200);
 s.SendTo(new byte[] { 0xFE, 0xFD, 0x0, 0x42, 0x73, 0x24, 0x69 , 0, 0, 0, 0}, new IPEndPoint(IPAddress.IPv6Loopback, 19132));
 
+while (true)
 Thread.Sleep(5000);
 
 query.StopListening();
