@@ -3,15 +3,9 @@ using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 
-QueryServer query = new QueryServer();
+QueryServer query = new QueryServer(()=>);
 
 query.StartListening(19132);
-
-query.OnReceiveCB = (EndPoint ip, byte[] buffer, int len) =>
-{
-    Console.WriteLine($"Received from {ip} ({len}) {BitConverter.ToString(buffer, 0, len)}");
-    return true;
-};
 
 Socket s = new Socket(SocketType.Dgram, ProtocolType.Udp);
 
@@ -30,36 +24,53 @@ query.StopListening();
 /// </summary>
 class QueryServer
 {
+    //consts
     const int MaxSocketRetry = 10;
-
-    //Query Protocol
-    const ushort Magic = 0xFEFD;
+    const ushort Magic = 0xFEFD;    
 
     static ArrayPool<byte> Bytes = ArrayPool<byte>.Shared;
     
+    //network related stuff
     Socket? s;
     byte[]? buffer;
     EndPoint ep = new IPEndPoint(IPAddress.IPv6Any, 0);
     object StateLock = new object();
-    object CallBackLock = new object();
 
-    //Callback that can be use to ip ban, if false is returned the packet will not be processed.
-    ReceiveCallback? _receiveCallback;
-    public ReceiveCallback? OnReceiveCB
+    object SendLock = new object();
+    Queue<SendPacket> packets = new Queue<SendPacket>();
+    bool Sending = false;
+
+    struct SendPacket
     {
-        set
-        {
-            lock (CallBackLock)
-                _receiveCallback = value;
-        }
-
-        get
-        {
-            lock (CallBackLock)
-                return _receiveCallback;
-        }
+        public byte[] data;
+        public EndPoint ep;
     }
-    public delegate bool ReceiveCallback(EndPoint Ip, byte[] buffer, int len);
+
+    //Token related stuff
+    Random r = new Random();
+    PriorityQueue<int, DateTime> TokenExpiration = new PriorityQueue<int, DateTime>();
+    Dictionary<int, EndPoint> TokenToEndPoint = new Dictionary<int, EndPoint>();
+    object TokenLock = new object();
+
+    //Server info callbacks & structs
+    public struct BasicServerInfo
+    {
+        public string MOTD;
+        public string GameType;
+        public string MapName;
+        public string NumPlayers;
+        public string MaxPlayers;
+        public ushort HostPort;
+        public string HostIp;
+    }
+
+    BasicInfoCB GetBasic;
+    public delegate BasicServerInfo BasicInfoCB();
+
+    public QueryServer(BasicInfoCB BasicCallBack)
+    {
+        GetBasic = BasicCallBack;
+    }
 
     /// <summary>
     /// Start listening for any incoming udp packet for the specified port
@@ -98,20 +109,8 @@ class QueryServer
         }        
     }
 
-    Random r = new Random();
-    PriorityQueue<int, DateTime> TokenExpiration = new PriorityQueue<int, DateTime>();
-    Dictionary<int, EndPoint> TokenToEndPoint = new Dictionary<int, EndPoint>();
-
-    object TokenLock = new object();
-
     void HandlePacket(byte[] buffer, int len, EndPoint address)
     {
-        ReceiveCallback? cb = OnReceiveCB;
-
-        if (cb is not null)
-            if (!cb(address, buffer, len))
-                return;
-
         int ptr = 0;
 
         if (buffer[ptr++] != 0xFE || buffer[ptr++] != 0xFD)
@@ -205,16 +204,6 @@ class QueryServer
         return true;
     }
 
-    struct SendPacket
-    {
-        public byte[] data;
-        public EndPoint ep;
-    }
-
-    object SendLock = new object();
-    Queue<SendPacket> packets = new Queue<SendPacket>();
-    bool Sending = false;
-
     void Send(SendPacket packet)
     {
 
@@ -247,6 +236,28 @@ class QueryServer
 
     }
 
+    void Listen()
+    {
+        if (s is null)
+            throw new Exception("Server is not listening");
+
+        int c = 0;
+
+        buffer = Bytes.Rent(1500);
+
+        retry:
+
+        try
+        {
+            s.BeginReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref ep, OnReceive, this);
+        }
+        catch (Exception)
+        {
+            if (c++ < MaxSocketRetry)
+                goto retry;
+        }
+    }
+
     static void OnSend(IAsyncResult res)
     {
         QueryServer? server = (QueryServer?)res.AsyncState;
@@ -261,7 +272,7 @@ class QueryServer
         catch (Exception)
         {
         }
-        
+
         lock (server.SendLock)
         {
             if (server.packets.Count > 0)
@@ -284,28 +295,6 @@ class QueryServer
             }
             else
                 server.Sending = false;
-        }
-    }
-
-    void Listen()
-    {
-        if (s is null)
-            throw new Exception("Server is not listening");
-
-        int c = 0;
-
-        buffer = Bytes.Rent(1500);
-
-        retry:
-
-        try
-        {
-            s.BeginReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref ep, OnReceive, this);
-        }
-        catch (Exception)
-        {
-            if (c++ < MaxSocketRetry)
-                goto retry;
         }
     }
 
